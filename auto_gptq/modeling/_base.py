@@ -70,6 +70,8 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
     inside_layer_modules: List[List[str]] = None
     lm_head_name: str = "lm_head"
 
+    supports_fused_attention: bool = False
+    supports_fused_mlp: bool = False
     fused_attn_module_type: Optional[FusedBaseAttentionModule] = None
     fused_mlp_module_type: Optional[FusedBaseMLPModule] = None
 
@@ -614,9 +616,13 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
             model.seqlen = 4096
 
         if inject_fused_attention:
-            if cls.fused_attn_module_type is None:
-                logger.warning(f"{cls.__name__} hasn't fused attention module yet, will skip inject fused attention.")
+            if not cls.supports_fused_attention:
+                logger.warning(f"{cls.__name__} doesn't support fused attention module yet, will skip inject fused attention.")
             else:
+                from ..nn_modules.fused_llama_attn import FusedLlamaAttentionForQuantizedModel
+
+                if cls.fused_attn_module_type is None:
+                    cls.fused_attn_module_type = FusedLlamaAttentionForQuantizedModel
                 cls.fused_attn_module_type.inject_to_model(
                     model,
                     use_triton=use_triton,
@@ -625,9 +631,19 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                     desc_act=quantize_config.desc_act
                 )
         if inject_fused_mlp:
-            if cls.fused_mlp_module_type is None:
-                logger.warning(f"{cls.__name__} hasn't fused mlp module yet, will skip inject fused mlp.")
+            if not use_triton:
+                logger.warning(f"Fused MLP is only supported with Triton at this time.")
+            elif not cls.supports_fused_mlp:
+                logger.warning(f"{cls.__name__} doens't support fused mlp yet, will skip inject fused MLP.")
             else:
+                if cls.fused_mlp_module_type is None:
+                    try:
+                        from ..nn_modules.fused_llama_mlp import FusedLlamaMLPForQuantizedModel
+                    except ModuleNotFoundError:
+                        logger.error('Triton is required for fused MLP but is not installed. Cannot continue.')
+                    except:
+                        raise
+                    cls.fused_mlp_module_type = FusedLlamaMLPForQuantizedModel
                 cls.fused_mlp_module_type.inject_to_model(
                     model,
                     use_triton=use_triton

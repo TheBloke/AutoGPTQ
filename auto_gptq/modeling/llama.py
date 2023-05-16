@@ -11,11 +11,8 @@ from ._const import *
 from ._utils import *
 
 from ._base import *
-from ..nn_modules.fused_llama_attn import FusedLlamaAttentionForQuantizedModel
-from ..nn_modules.fused_llama_mlp import FusedLlamaMLPForQuantizedModel
 
 logger = getLogger(__name__)
-
 
 class LlamaGPTQForCausalLM(BaseGPTQForCausalLM):
     layer_type = "LlamaDecoderLayer"
@@ -28,8 +25,7 @@ class LlamaGPTQForCausalLM(BaseGPTQForCausalLM):
         ["mlp.down_proj"]
     ]
 
-    fused_attn_module_type = FusedLlamaAttentionForQuantizedModel
-    fused_mlp_module_type = FusedLlamaMLPForQuantizedModel
-
+    supports_fused_attention = True
+    supports_fused_mlp = True
 
 __all__ = ["LlamaGPTQForCausalLM"]
