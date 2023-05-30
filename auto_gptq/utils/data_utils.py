@@ -13,9 +13,11 @@ from transformers import PreTrainedTokenizer
 def make_data_block(
     samples: Dict[str, List[str]],
     prompt_col_name: str,
-    label_col_name: str,
     tokenizer: PreTrainedTokenizer,
+    batched: Optional[bool] = True,
+    label_col_name: Optional[str] = None,
     preprocess_fn: Optional[Callable] = None,
+    add_special_tokens: bool = True,
     sample_max_len: int = 1024,
     block_max_len: int = 2048,
     add_eos_token: bool = False,
@@ -45,105 +47,129 @@ def make_data_block(
     if preprocess_fn:
         samples = preprocess_fn(samples)
 
-    prompts = samples[prompt_col_name]
-    labels = samples[label_col_name]
-
     # tokenize samples
-    tokenized_prompts = tokenizer(prompts, truncation=False)["input_ids"]
-    tokenized_labels = tokenizer(labels, truncation=False)["input_ids"]
+    prompts = samples[prompt_col_name]
 
-    # filter tokenized samples by length
-    dropped_indices = []
-    for idx, (tokenized_prompt, tokenized_label) in enumerate(zip(tokenized_prompts, tokenized_labels)):
-        if add_eos_token:
-            tokenized_label += [tokenizer.eos_token_id]
-        len_prompt = len(tokenized_prompt)
-        len_label = len(tokenized_label)
-        exceed_len = len_prompt + len_label - sample_max_len
-        if exceed_len > 0:
-            if truncate_prompt:
-                tokenized_prompt = tokenized_prompt[exceed_len:]
+    with open('sample_text.new', 'a') as f:
+        f.write(prompts)
+
+    tokenized_prompts = tokenizer(prompts, truncation=False, add_special_tokens=False) #["input_ids"]
+    print(tokenized_prompts)
+    
+    print(f"prompts: ||{prompts}||")
+    print(f"tokens: ||{tokenized_prompts}||")
+
+    tokens_list = [str(t) for t in tokenized_prompts]
+    dump_tokens = ','.join(tokens_list)
+
+        # Write the string to the file
+    with open('samples_dump_tokens.new', 'a') as f:
+        f.write(dump_tokens)
+        f.write(",")
+    #with open('sample_tokenized.new', 'a') as f:
+    #    f.write(tokenized_prompts + ",")
+
+    if label_col_name is not None:
+        labels = samples[label_col_name]
+        tokenized_labels = tokenizer(labels, truncation=False, add_special_tokens=add_special_tokens)["input_ids"]
+
+    if batched:
+        # filter tokenized samples by length
+        dropped_indices = []
+        for idx, (tokenized_prompt, tokenized_label) in enumerate(zip(tokenized_prompts, tokenized_labels)):
+            if add_eos_token:
+                tokenized_label += [tokenizer.eos_token_id]
+            len_prompt = len(tokenized_prompt)
+            len_label = len(tokenized_label)
+            exceed_len = len_prompt + len_label - sample_max_len
+            if exceed_len > 0:
+                if truncate_prompt:
+                    tokenized_prompt = tokenized_prompt[exceed_len:]
+                else:
+                    tokenized_label = tokenized_label[: -exceed_len]
+            tokenized_prompts[idx] = tokenized_prompt
+            tokenized_labels[idx] = tokenized_label
+            if not tokenized_label:
+                dropped_indices.append(idx)
+
+        # make data blocks of samples
+        tokenized_samples = sorted(
+            [
+                (p, l) for idx, (p, l) in enumerate(zip(tokenized_prompts, tokenized_labels))
+                if idx not in dropped_indices
+            ],
+            key=lambda x: (len(x[0]) + len(x[1])) if merge_prompt_label else len(x[0])
+        )
+        sample_blocks = []
+        sample_block = []
+        blk_max_len = 0
+        blk_total_len = 0
+        for tokenized_sample in tokenized_samples:
+            prompt_ids, label_ids = tokenized_sample
+            ori_sample_len = len(prompt_ids)
+            if merge_prompt_label:
+                ori_sample_len += len(label_ids)
+            if ori_sample_len <= blk_max_len:
+                additional_len = blk_max_len
+                sample_len = blk_max_len
             else:
-                tokenized_label = tokenized_label[: -exceed_len]
-        tokenized_prompts[idx] = tokenized_prompt
-        tokenized_labels[idx] = tokenized_label
-        if not tokenized_label:
-            dropped_indices.append(idx)
+                additional_len = len(sample_block) * (ori_sample_len - blk_max_len) + ori_sample_len
+                sample_len = ori_sample_len
 
-    # make data blocks of samples
-    tokenized_samples = sorted(
-        [
-            (p, l) for idx, (p, l) in enumerate(zip(tokenized_prompts, tokenized_labels))
-            if idx not in dropped_indices
-        ],
-        key=lambda x: (len(x[0]) + len(x[1])) if merge_prompt_label else len(x[0])
-    )
-    sample_blocks = []
-    sample_block = []
-    blk_max_len = 0
-    blk_total_len = 0
-    for tokenized_sample in tokenized_samples:
-        prompt_ids, label_ids = tokenized_sample
-        ori_sample_len = len(prompt_ids)
-        if merge_prompt_label:
-            ori_sample_len += len(label_ids)
-        if ori_sample_len <= blk_max_len:
-            additional_len = blk_max_len
-            sample_len = blk_max_len
-        else:
-            additional_len = len(sample_block) * (ori_sample_len - blk_max_len) + ori_sample_len
-            sample_len = ori_sample_len
+            if blk_total_len + additional_len > block_max_len:
+                sample_blocks.append((copy.copy(sample_block), blk_max_len))
+                sample_block = []
+                blk_max_len = 0
+                blk_total_len = 0
+                sample_len = ori_sample_len
+                additional_len = ori_sample_len
 
-        if blk_total_len + additional_len > block_max_len:
+            sample_block.append(tokenized_sample)
+            blk_max_len = max(blk_max_len, sample_len)
+            blk_total_len += additional_len
+
+        if sample_block:
             sample_blocks.append((copy.copy(sample_block), blk_max_len))
-            sample_block = []
-            blk_max_len = 0
-            blk_total_len = 0
-            sample_len = ori_sample_len
-            additional_len = ori_sample_len
-
-        sample_block.append(tokenized_sample)
-        blk_max_len = max(blk_max_len, sample_len)
-        blk_total_len += additional_len
-
-    if sample_block:
-        sample_blocks.append((copy.copy(sample_block), blk_max_len))
-    del sample_block
-    del blk_max_len
-    del blk_total_len
+        del sample_block
+        del blk_max_len
+        del blk_total_len
 
     new_samples = {
         "input_ids": [],
         "attention_mask": [],
         "labels": []
     }
-    # padding each data block internally
-    for block, blk_max_len in sample_blocks:
-        input_ids = []
-        attention_mask = []
-        label_ids = []
-        label_max_len = max([len(sample[1]) for sample in block])
 
-        for sample in block:
-            tokenized_prompt, tokenized_label = sample
-            sample_len = len(tokenized_prompt)
-            if merge_prompt_label:
-                sample_len += len(tokenized_label)
-            pad_num = blk_max_len - sample_len
-            if merge_prompt_label:
-                input_ids.append([tokenizer.pad_token_id] * pad_num + tokenized_prompt + tokenized_label)
-                label_ids.append([-100] * (pad_num + len(tokenized_prompt)) + tokenized_label)
-            else:
-                input_ids.append([tokenizer.pad_token_id] * pad_num + tokenized_prompt)
-                label_ids.append([-100] * (label_max_len - len(tokenized_label)) + tokenized_label)
-            attention_mask.append([0] * pad_num + [1] * sample_len)
+    if batched:
+        # padding each data block internally
+        for block, blk_max_len in sample_blocks:
+            input_ids = []
+            attention_mask = []
+            label_ids = []
+            label_max_len = max([len(sample[1]) for sample in block])
 
-        new_samples["input_ids"].append(input_ids)
-        new_samples["attention_mask"].append(attention_mask)
-        new_samples["labels"].append(label_ids)
+            for sample in block:
+                tokenized_prompt, tokenized_label = sample
+                sample_len = len(tokenized_prompt)
+                if merge_prompt_label:
+                    sample_len += len(tokenized_label)
+                pad_num = blk_max_len - sample_len
+                if merge_prompt_label:
+                    input_ids.append([tokenizer.pad_token_id] * pad_num + tokenized_prompt + tokenized_label)
+                    label_ids.append([-100] * (pad_num + len(tokenized_prompt)) + tokenized_label)
+                else:
+                    input_ids.append([tokenizer.pad_token_id] * pad_num + tokenized_prompt)
+                    label_ids.append([-100] * (label_max_len - len(tokenized_label)) + tokenized_label)
+                attention_mask.append([0] * pad_num + [1] * sample_len)
+            new_samples["input_ids"].append(input_ids)
+            new_samples["attention_mask"].append(attention_mask)
+            new_samples["labels"].append(label_ids)
+    else:
+        new_samples["input_ids"].append(tokenized_prompts)
+        new_samples["attention_mask"].append([0] * len(tokenized_prompts))
+        new_samples["labels"].append([0] * len(tokenized_prompts))
 
     return new_samples
-
 
 def collate_data(blocks: List[Dict[str, List[List[int]]]], pad_token_id: int) -> Dict[str, LongTensor]:
     def pad_block(block, pads):
@@ -180,12 +206,15 @@ def get_dataloader(
     prompt_col_name: str,
     label_col_name: str,
     tokenizer: PreTrainedTokenizer,
+    batched: Optional[bool] = True,
     load_fn: Optional[Callable] = None,
     preprocess_fn: Optional[Callable] = None,
+    limit_samples: bool = True,
     num_samples: int = 128,
     sample_max_len: int = 1024,
     block_max_len: int = 2048,
     add_eos_token: bool = False,
+    add_special_tokens: bool = True,
     truncate_prompt: bool = True,
     merge_prompt_label: bool = False,
     load_fn_kwargs: Optional[dict] = None,
@@ -198,10 +227,12 @@ def get_dataloader(
     :param prompt_col_name: str, see `make_data_block`
     :param label_col_name: str, see `make_data_block`
     :param tokenizer: str, see `make_data_block`
+    :param batched: bool, defaults to True, whether to batch the dataset using `make_data_block`
     :param load_fn: Optional[Callable], defaults to None, function used to load dataset, if not specified,
         use `datasets.load_dataset`
     :param preprocess_fn: Optional[Callable], see `make_data_block`
-    :param num_samples: int, defaults to 128, total samples used to evaluation
+    :param limit_samples: bool, defaults to True, whether to return a subset of the data (True) or all of the data (False)
+    :param num_samples: int, defaults to 128, total samples used for evaluation when limit_samples = True
     :param sample_max_len: int, see `make_data_block`
     :param block_max_len: int, see `make_data_block`
     :param add_eos_token: bool, see `make_data_block`
@@ -233,10 +264,10 @@ def get_dataloader(
         else:
             ds = ds["train"]
 
-    ds = ds.select(indices=random.sample(range(len(ds)), min(len(ds), num_samples)), keep_in_memory=True)
+    if limit_samples:
+        ds = ds.select(indices=random.sample(range(len(ds)), min(len(ds), num_samples)), keep_in_memory=True)
     ds = ds.map(
         make_data_block,
-        batched=True,
         batch_size=len(ds),
         num_proc=1,
         remove_columns=ds.column_names,
@@ -246,9 +277,11 @@ def get_dataloader(
             "prompt_col_name": prompt_col_name,
             "label_col_name": label_col_name,
             "tokenizer": tokenizer,
-            "preprocess_fn": partial(preprocess_fn, **preprocess_fn_kwargs),
+            "batched": batched,
+            "preprocess_fn": callable(preprocess_fn) and partial(preprocess_fn, **preprocess_fn_kwargs) or None,
             "sample_max_len": sample_max_len,
             "block_max_len": block_max_len,
+            "add_special_tokens": add_special_tokens,
             "add_eos_token": add_eos_token,
             "truncate_prompt": truncate_prompt,
             "merge_prompt_label": merge_prompt_label
@@ -258,7 +291,8 @@ def get_dataloader(
     # override some arguments' values in kwargs despite user specified
     kwargs["batch_size"] = 1
     kwargs["shuffle"] = False
-    kwargs["collate_fn"] = partial(collate_data, pad_token_id=tokenizer.pad_token_id)
+    if batched:
+        kwargs["collate_fn"] = partial(collate_data, pad_token_id=tokenizer.pad_token_id)
     dl = DataLoader(ds, **kwargs)
 
     return dl

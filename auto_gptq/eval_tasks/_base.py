@@ -15,21 +15,25 @@ class BaseTask:
         tokenizer: PreTrainedTokenizer,
         data_name_or_path: str,
         prompt_col_name: str,
-        label_col_name: str,
+        batched: Optional[bool] = True,
+        label_col_name: Optional[str] = None,
         device: Optional[str] = None,
         **kwargs
     ):
         self.model = model
         self.tokenizer = tokenizer
+        """
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
             self.model.config.pad_token_id = self.tokenizer.eos_token_id
+        """
         self.dl = get_dataloader(
             data_name_or_path,
             prompt_col_name=prompt_col_name,
             label_col_name=label_col_name,
             tokenizer=tokenizer,
+            batched=batched,
             **kwargs
         )
 
