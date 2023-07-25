@@ -16,12 +16,17 @@ if sys.version_info < python_min_version:
     print(f"You are using Python {platform.python_version()}. Python >={python_min_version_str} is required.")
     sys.exit(-1)
 
+print("CUDA_VERSION ENV IS:", os.environ.get("CUDA_VERSION", "not found"))
+
 if TORCH_AVAILABLE:
     CUDA_VERSION = "".join(torch.version.cuda).split(".")
 else:
     CUDA_VERSION = "".join(os.environ.get("CUDA_VERSION", "").split("."))
 
+print("CUDA_VERSION IS:", CUDA_VERSION)
+
 version = "0.3.0" + (f"+cu{CUDA_VERSION}" if CUDA_VERSION else "")
+print("version is ", version)
 common_setup_kwargs = {
     "version": version,
     "name": "auto_gptq",
