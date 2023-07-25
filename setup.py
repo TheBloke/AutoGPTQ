@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from setuptools import setup, find_packages
 
+from auto_gptq import __version__
+
 try:
     import torch
     TORCH_AVAILABLE = True
@@ -21,7 +23,7 @@ if TORCH_AVAILABLE:
 else:
     CUDA_VERSION = "".join(os.environ.get("CUDA_VERSION", "").split("."))
 
-version = "0.3.0" + (f"+cu{CUDA_VERSION}" if CUDA_VERSION else "")
+version = __version__ + (f"+cu{CUDA_VERSION}" if CUDA_VERSION else "")
 common_setup_kwargs = {
     "version": version,
     "name": "auto_gptq",
